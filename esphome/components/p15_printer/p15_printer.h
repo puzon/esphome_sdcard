@@ -81,12 +81,6 @@ class P15Printer : public display::DisplayBuffer, public ble_client::BLEClientNo
   int stride_{0};
 };
 
-// Template action for send_to_printer
-template<typename... Ts> class P15PrintAction : public Action<Ts...>, public Parented<P15Printer> {
- public:
-  void play(Ts... x) override { this->parent_->send_to_printer(); }
-};
-
 }  // namespace p15_printer
 }  // namespace esphome
 

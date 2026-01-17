@@ -3,15 +3,16 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import CONF_ID
 
-CODEOWNERS = ["@your_username"]
+CODEOWNERS = ["@puzon"]
 DEPENDENCIES = ["ble_client"]
 
 p15_printer_ns = cg.esphome_ns.namespace("p15_printer")
 P15Printer = p15_printer_ns.class_("P15Printer")
 
 # Action for printing
-P15PrintAction = p15_printer_ns.class_("P15PrintAction", automation.Action)
-
+P15PrintAction = p15_printer_ns.class_(
+    "P15PrintAction", automation.Action, cg.Parented.template(P15Printer)
+)
 # Action schema for p15_printer.print
 P15_PRINT_ACTION_SCHEMA = automation.maybe_simple_id(
     {
