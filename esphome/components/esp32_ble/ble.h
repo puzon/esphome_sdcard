@@ -87,38 +87,7 @@ enum BLEComponentState : uint8_t {
   BLE_COMPONENT_STATE_ACTIVE,
 };
 
-class GAPEventHandler {
- public:
-  virtual void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) = 0;
-};
-
-class GAPScanEventHandler {
- public:
-  virtual void gap_scan_event_handler(const BLEScanResult &scan_result) = 0;
-};
-
-#ifdef USE_ESP32_BLE_CLIENT
-class GATTcEventHandler {
- public:
-  virtual void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
-                                   esp_ble_gattc_cb_param_t *param) = 0;
-};
-#endif
-
-#ifdef USE_ESP32_BLE_SERVER
-class GATTsEventHandler {
- public:
-  virtual void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
-                                   esp_ble_gatts_cb_param_t *param) = 0;
-};
-#endif
-
-class BLEStatusEventHandler {
- public:
-  virtual void ble_before_disabled_event_handler() = 0;
-};
-
-class ESP32BLE : public Component {
+class ESP32BLE final : public Component {
  public:
   void set_io_capability(IoCapability io_capability) { this->io_cap_ = (esp_ble_io_cap_t) io_capability; }
 
@@ -139,11 +108,23 @@ class ESP32BLE : public Component {
   void setup() override;
   void loop() override;
   void dump_config() override;
+  /// Adapter MAC in printable (MSB-first) order; all-zero until the stack is up.
+  void get_mac_msb_first(uint8_t out[MAC_ADDRESS_SIZE]) const;
   float get_setup_priority() const override;
   void set_name(const char *name) { this->name_ = name; }
 
 #ifdef USE_ESP32_BLE_ADVERTISING
+  /** Request advertising on behalf of a component.
+   *
+   * Requests are reference counted: advertising runs until every component that called
+   * advertising_start() has released it again with advertising_stop(). Each component must
+   * pair its calls, so nothing advertises until something actually asks for it.
+   */
   void advertising_start();
+  /// Release a request made with advertising_start(); advertising stops at the last release.
+  void advertising_stop();
+  /// Apply the current payload and request count: advertise while requested, otherwise stop.
+  void advertising_refresh();
   void advertising_set_service_data(const std::vector<uint8_t> &data);
   void advertising_set_manufacturer_data(const std::vector<uint8_t> &data);
   void advertising_set_appearance(uint16_t appearance) { this->appearance_ = appearance; }
@@ -154,22 +135,28 @@ class ESP32BLE : public Component {
 #endif
 
 #ifdef ESPHOME_ESP32_BLE_GAP_EVENT_HANDLER_COUNT
-  void register_gap_event_handler(GAPEventHandler *handler) { this->gap_event_handlers_.push_back(handler); }
+  template<typename F> void add_gap_event_callback(F &&callback) {
+    this->gap_event_callbacks_.add(std::forward<F>(callback));
+  }
 #endif
 #ifdef ESPHOME_ESP32_BLE_GAP_SCAN_EVENT_HANDLER_COUNT
-  void register_gap_scan_event_handler(GAPScanEventHandler *handler) {
-    this->gap_scan_event_handlers_.push_back(handler);
+  template<typename F> void add_gap_scan_event_callback(F &&callback) {
+    this->gap_scan_event_callbacks_.add(std::forward<F>(callback));
   }
 #endif
 #if defined(USE_ESP32_BLE_CLIENT) && defined(ESPHOME_ESP32_BLE_GATTC_EVENT_HANDLER_COUNT)
-  void register_gattc_event_handler(GATTcEventHandler *handler) { this->gattc_event_handlers_.push_back(handler); }
+  template<typename F> void add_gattc_event_callback(F &&callback) {
+    this->gattc_event_callbacks_.add(std::forward<F>(callback));
+  }
 #endif
 #if defined(USE_ESP32_BLE_SERVER) && defined(ESPHOME_ESP32_BLE_GATTS_EVENT_HANDLER_COUNT)
-  void register_gatts_event_handler(GATTsEventHandler *handler) { this->gatts_event_handlers_.push_back(handler); }
+  template<typename F> void add_gatts_event_callback(F &&callback) {
+    this->gatts_event_callbacks_.add(std::forward<F>(callback));
+  }
 #endif
 #ifdef ESPHOME_ESP32_BLE_BLE_STATUS_EVENT_HANDLER_COUNT
-  void register_ble_status_event_handler(BLEStatusEventHandler *handler) {
-    this->ble_status_event_handlers_.push_back(handler);
+  template<typename F> void add_ble_status_event_callback(F &&callback) {
+    this->ble_status_event_callbacks_.add(std::forward<F>(callback));
   }
 #endif
   void set_enable_on_boot(bool enable_on_boot) { this->enable_on_boot_ = enable_on_boot; }
@@ -202,21 +189,27 @@ class ESP32BLE : public Component {
  private:
   template<typename... Args> friend void enqueue_ble_event(Args... args);
 
-  // Handler vectors - use StaticVector when counts are known at compile time
 #ifdef ESPHOME_ESP32_BLE_GAP_EVENT_HANDLER_COUNT
-  StaticVector<GAPEventHandler *, ESPHOME_ESP32_BLE_GAP_EVENT_HANDLER_COUNT> gap_event_handlers_;
+  StaticCallbackManager<ESPHOME_ESP32_BLE_GAP_EVENT_HANDLER_COUNT,
+                        void(esp_gap_ble_cb_event_t, esp_ble_gap_cb_param_t *)>
+      gap_event_callbacks_;
 #endif
 #ifdef ESPHOME_ESP32_BLE_GAP_SCAN_EVENT_HANDLER_COUNT
-  StaticVector<GAPScanEventHandler *, ESPHOME_ESP32_BLE_GAP_SCAN_EVENT_HANDLER_COUNT> gap_scan_event_handlers_;
+  StaticCallbackManager<ESPHOME_ESP32_BLE_GAP_SCAN_EVENT_HANDLER_COUNT, void(const BLEScanResult &)>
+      gap_scan_event_callbacks_;
 #endif
 #if defined(USE_ESP32_BLE_CLIENT) && defined(ESPHOME_ESP32_BLE_GATTC_EVENT_HANDLER_COUNT)
-  StaticVector<GATTcEventHandler *, ESPHOME_ESP32_BLE_GATTC_EVENT_HANDLER_COUNT> gattc_event_handlers_;
+  StaticCallbackManager<ESPHOME_ESP32_BLE_GATTC_EVENT_HANDLER_COUNT,
+                        void(esp_gattc_cb_event_t, esp_gatt_if_t, esp_ble_gattc_cb_param_t *)>
+      gattc_event_callbacks_;
 #endif
 #if defined(USE_ESP32_BLE_SERVER) && defined(ESPHOME_ESP32_BLE_GATTS_EVENT_HANDLER_COUNT)
-  StaticVector<GATTsEventHandler *, ESPHOME_ESP32_BLE_GATTS_EVENT_HANDLER_COUNT> gatts_event_handlers_;
+  StaticCallbackManager<ESPHOME_ESP32_BLE_GATTS_EVENT_HANDLER_COUNT,
+                        void(esp_gatts_cb_event_t, esp_gatt_if_t, esp_ble_gatts_cb_param_t *)>
+      gatts_event_callbacks_;
 #endif
 #ifdef ESPHOME_ESP32_BLE_BLE_STATUS_EVENT_HANDLER_COUNT
-  StaticVector<BLEStatusEventHandler *, ESPHOME_ESP32_BLE_BLE_STATUS_EVENT_HANDLER_COUNT> ble_status_event_handlers_;
+  StaticCallbackManager<ESPHOME_ESP32_BLE_BLE_STATUS_EVENT_HANDLER_COUNT, void()> ble_status_event_callbacks_;
 #endif
 
   // Large objects (size depends on template parameters, but typically aligned to 4 bytes)
@@ -243,6 +236,9 @@ class ESP32BLE : public Component {
   // 1-byte aligned members (grouped together to minimize padding)
   BLEComponentState state_{BLE_COMPONENT_STATE_OFF};  // 1 byte (uint8_t enum)
   bool enable_on_boot_{};                             // 1 byte
+#ifdef USE_ESP32_BLE_ADVERTISING
+  uint8_t advertising_ref_count_{0};  // 1 byte, number of components requesting advertising
+#endif
 
 #ifdef ESPHOME_ESP32_BLE_EXTENDED_AUTH_PARAMS
   optional<esp_ble_auth_req_t> auth_req_mode_;
@@ -255,12 +251,12 @@ class ESP32BLE : public Component {
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 extern ESP32BLE *global_ble;
 
-template<typename... Ts> class BLEEnabledCondition : public Condition<Ts...> {
+template<typename... Ts> class BLEEnabledCondition final : public Condition<Ts...> {
  public:
   bool check(const Ts &...x) override { return global_ble != nullptr && global_ble->is_active(); }
 };
 
-template<typename... Ts> class BLEEnableAction : public Action<Ts...> {
+template<typename... Ts> class BLEEnableAction final : public Action<Ts...> {
  public:
   void play(const Ts &...x) override {
     if (global_ble != nullptr)
@@ -268,7 +264,7 @@ template<typename... Ts> class BLEEnableAction : public Action<Ts...> {
   }
 };
 
-template<typename... Ts> class BLEDisableAction : public Action<Ts...> {
+template<typename... Ts> class BLEDisableAction final : public Action<Ts...> {
  public:
   void play(const Ts &...x) override {
     if (global_ble != nullptr)
